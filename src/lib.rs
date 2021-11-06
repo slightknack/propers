@@ -1,7 +1,7 @@
-use std::panic::{set_hook, catch_unwind, resume_unwind, UnwindSafe};
+use std::panic::{catch_unwind, resume_unwind, UnwindSafe};
 use std::fmt::Debug;
 use std::collections::BinaryHeap;
-use std::cmp::{Ord, Ordering};
+use std::cmp::{PartialOrd, Ord, Ordering};
 
 /// A type to be used in different test cases
 pub trait Case: Debug + Clone + UnwindSafe {}
@@ -23,6 +23,28 @@ pub trait  TestResult: Debug + UnwindSafe { fn is_ok(&self) -> bool; }
 impl<T, E> TestResult for Result<T, E> where Self: Debug + UnwindSafe { fn is_ok(&self) -> bool { self.is_ok()   } }
 impl<T>    TestResult for Option<T>    where Self: Debug + UnwindSafe { fn is_ok(&self) -> bool { self.is_some() } }
 
+#[derive(Debug, Clone)]
+struct Scored<T: Shrink>(T);
+
+impl<T: Shrink> Eq        for Scored<T> {}
+impl<T: Shrink> PartialEq for Scored<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.score().eq(&other.0.score())
+    }
+}
+
+impl<T: Shrink> Ord for Scored<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.score().cmp(&other.0.score())
+    }
+}
+
+impl<T: Shrink> PartialOrd for Scored<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 pub const NUM_TESTS: usize = 100;
 pub const SHRINK_BUDGET: usize = 1000;
 
@@ -41,26 +63,47 @@ pub fn run_case<T: Case, R: TestResult>(
     }
 }
 
-struct Scored<T: Shrink>(T);
-
-impl Cmp for Scored {
-    fn cmp(&self, other: &Self) -> Ordering {
-
-    }
-}
 
 fn shrink_case<T: Shrink, R: TestResult>(
     case: T,
     run: &fn(T) -> R
 ) -> T {
-    let smallest = (case.clone(), case.score());
-    let mut queue: BinaryHeap<T> = case.shrink().collect();
+    eprintln!("Reducing case, max {} steps: ", SHRINK_BUDGET);
 
-    for trial in 0..SHRINK_BUDGET {
-        let case = queue.
+    let mut times = 0;
+    let mut smallest = Scored(case.clone());
+    let mut potentials: BinaryHeap<Scored<T>> = case.shrink().map(|x| Scored(x)).collect();
+
+    for test_num in 0..SHRINK_BUDGET {
+        eprint!("?");
+
+        let case = match potentials.pop() {
+            None => {
+                println!("\nExhausted sampled possibilities");
+                break;
+            },
+            Some(case) => case,
+        };
+
+        if run_case(case.0.clone(), run).is_ok() {
+            eprint!("\u{8}o");
+            // we don't add the passing case to the reduction set
+            continue;
+        } if case < smallest {
+            times += 1;
+            smallest = case.clone();
+            eprintln!("\u{8}!\n");
+            eprintln!("Shrunk case to score {} on test #{}:\n\n{:#?}\n", test_num, case.0.score(), case.0);
+        } else {
+            eprint!("\u{8}.");
+        }
+
+        let new_potentials = &mut case.0.shrink().map(|x| Scored(x)).collect();
+        potentials.append(new_potentials);
     }
 
-    todo!()
+    eprintln!("\n\nExhausted reduction budget, reduced {} times\n", times);
+    return smallest.0;
 }
 
 pub fn test<T: Shrink, R: TestResult>(
@@ -72,9 +115,8 @@ pub fn test<T: Shrink, R: TestResult>(
     for test_num in 0..NUM_TESTS {
         eprint!("?");
         let case = gen.faux();
-        let case_copy = case.clone();
 
-        let failure = match run_case(case, run) {
+        let failure = match run_case(case.clone(), run) {
             Ok(_) => {
                 eprint!("\u{8}.");
                 continue;
@@ -84,13 +126,17 @@ pub fn test<T: Shrink, R: TestResult>(
 
         // The test failed, handle it!
         eprintln!("!\n");
-        eprintln!("Failed on test #{}:\n\n{:#?}\n", test_num, case_copy);
-        eprintln!("Reducing the failing case:");
+        eprintln!("Failed on test #{}:\n\n{:#?}\n", test_num, case);
+        let reduced = shrink_case(case, run);
+        eprintln!("Smallest failing case:\n\n{:#?}\n", reduced);
+        eprintln!("Happy debugging!");
 
-
+        // raise the panic
+        failure();
     }
 
-    todo!()
+    eprintln!(" :)\n");
+    eprintln!("All tests passed");
 }
 
 #[cfg(test)]
