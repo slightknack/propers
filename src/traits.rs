@@ -1,43 +1,55 @@
-use std::panic::UnwindSafe;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::cmp::{PartialOrd, Ord, Ordering};
+use std::iter::repeat_with;
 use crate::Rng;
 
 /// A type to be used in different test cases
-pub trait Case: Debug + Clone {}
-impl<T> Case for T where Self: Debug + Clone {}
+pub trait Case: Debug + Clone + Eq + Hash {}
+impl<T> Case for T where Self: Debug + Clone + Eq + Hash {}
 
 /// A trait that tries to simplify a failing test case
 pub trait Shrink: Case {
-    // TODO: how many reductions?
-    /// Reduces self, must return a finite number of test cases.
-    fn shrink(self, rng: &mut Rng) -> Box<dyn Iterator<Item = Self>>;
+    #[allow(unused_variables)]
+    fn shrink(self, rng: Rng) -> Option<Self> {
+        None
+    }
 
     // length is a good proxy for complexity
-    fn score(&self) -> isize {
-        format!("{:?}", self).len() as isize
+    fn score(&self) -> usize {
+        format!("{:?}", self).len()
     }
 }
 
 impl Shrink for usize {
-    fn shrink(self, rng: &mut Rng) -> Box<dyn Iterator<Item = usize>> {
-        rng.next();
-        Box::new((0..self).rev())
+    fn shrink(self, mut rng: Rng) -> Option<Self> {
+        if self == 0 { return None }
+        if rng.next_bool() {
+            repeat_with(|| rng.next_usize_max(self - 1))
+                .next()
+        } else {
+            Some(self - 1)
+        }
     }
 
-    fn score(&self) -> isize {
-        (*self).try_into().unwrap_or(isize::MAX)
+    fn score(&self) -> usize {
+        *self
     }
 }
 
-impl<T: Case> Shrink for Vec<T> {
-    fn shrink(self, rng: &mut Rng) -> Box<dyn Iterator<Item = Self>> {
-        Box::new((0..10).map(|_| {
-            let new = self.to_owned();
-            let index = rng.next_usize() % self.len();
-            new.remove(index);
-            new
-        }))
+impl<T: Shrink> Shrink for Vec<T> {
+    fn shrink(mut self, mut rng: Rng) -> Option<Self> {
+        if self.len() == 0 { return None; }
+        let index = rng.next_usize_max(self.len() - 1);
+        if rng.next_bool() {
+            self.remove(index);
+        } else if let Some(smaller) = self[index].clone()
+            .shrink(Rng::new_with_seed(rng.next_usize() as u64))
+        {
+            self[index] = smaller;
+        }
+
+        Some(self)
     }
 }
 

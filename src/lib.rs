@@ -1,11 +1,12 @@
-use std::panic::{catch_unwind, resume_unwind, UnwindSafe, AssertUnwindSafe};
-use std::collections::{BTreeMap, BinaryHeap, VecDeque};
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe, set_hook, take_hook};
+use std::collections::{HashMap, VecDeque};
 use std::iter::Iterator;
 
 pub mod traits;
 pub use traits::*;
 pub mod rng;
 pub use rng::Rng;
+pub mod gen;
 
 pub const NUM_TESTS: usize = 100;
 pub const SHRINK_BUDGET: usize = 1000;
@@ -13,38 +14,60 @@ pub const SHRINK_BUDGET: usize = 1000;
 pub fn run_case<T: Case, R: TestResult>(
     case: T,
     run: &impl Fn(T) -> R,
+    cache: &mut HashMap<T, bool>,
 ) -> Result<(), Box<dyn FnOnce() -> ()>> {
-    let result = catch_unwind(AssertUnwindSafe(|| run(case)));
+    match cache.get(&case) {
+        Some(true) => return Ok(()),
+        Some(false) => return Err(Box::new(move || { panic!("Cached test, already failed"); })),
+        None => (),
+    }
 
-    match result {
-        Ok(r) if r.is_ok() => Ok(()),
+    // install a silent hook...
+    let prev_hook = take_hook();
+    set_hook(Box::new(|_| {}));
+    // run the test case
+    let result = catch_unwind(AssertUnwindSafe(|| run(case.clone())));
+    // restore the old hook
+    set_hook(prev_hook);
+
+    let err: Box<dyn FnOnce() -> ()> = match result {
+        Ok(r) if r.is_ok() => {
+            cache.insert(case.clone(), true);
+            return Ok(());
+        },
         Ok(e)  => {
             let formatted = format!("Failed with test result: {:#?}", e);
-            Err(Box::new(move || { panic!("{}", formatted); }))
+            Box::new(move || { panic!("{}", formatted); })
         },
-        Err(e) => Err(Box::new(move || { resume_unwind(e); })),
-    }
+        Err(e) => Box::new(move || { resume_unwind(e); }),
+    };
+
+    cache.insert(case.clone(), false);
+    return Err(err);
 }
 
 fn shrink_case<T: Shrink, R: TestResult>(
     case: T,
     run: &impl Fn(T) -> R,
+    cache: &mut HashMap<T, bool>,
 ) -> T {
     eprintln!("Reducing case, max {} steps ", SHRINK_BUDGET);
 
     let mut times = 0;
-    let mut rng = Rng::new();
     let mut best = Scored(case.clone());
-    let mut potentials: VecDeque<Scored<T>>
-        = case.shrink(&mut rng).map(|x| Scored(x)).collect();
+    let mut potentials: VecDeque<Scored<T>> = VecDeque::new();
+    // let mut seen: BTreeSet<Scored<T>> = BTreeSet::new();
 
     for test_num in 0..SHRINK_BUDGET {
         let case = match potentials.pop_front() {
-            None => break,
+            None => match best.0.clone().shrink(Rng::new_with_seed(test_num as u64)) {
+                None => break,
+                Some(case) => Scored(case),
+            },
             Some(case) => case,
         };
 
-        if run_case(case.0.clone(), run).is_ok() {
+        if run_case(case.0.clone(), run, cache).is_ok() {
             eprint!(".");
             // we don't add the passing case to the reduction set
             continue;
@@ -56,8 +79,9 @@ fn shrink_case<T: Shrink, R: TestResult>(
             eprint!(",");
         }
 
-        let new_potentials = &mut case.0.shrink(&mut rng).map(|x| Scored(x)).collect();
-        potentials.append(new_potentials);
+        if let Some(maybe_better) = case.0.shrink(Rng::new_with_seed(test_num as u64)) {
+            potentials.push_back(Scored(maybe_better));
+        }
     }
 
     eprintln!("\nReduced {} times, smallest failing case:\n\n{:#?}", times, best.0);
@@ -81,7 +105,8 @@ pub fn verify<T: Shrink, R: TestResult, I: Iterator<Item = T>>(
             }
         };
 
-        let failure = match run_case(case.clone(), run) {
+        let mut cache = HashMap::new();
+        let failure = match run_case(case.clone(), run, &mut cache) {
             Ok(_) => {
                 eprint!(".");
                 continue;
@@ -92,7 +117,7 @@ pub fn verify<T: Shrink, R: TestResult, I: Iterator<Item = T>>(
         // The test failed, handle it!
         eprintln!("!");
         eprintln!("Failed on test {}:\n\n{:#?}\n", test_num, case);
-        shrink_case(case, run);
+        shrink_case(case, run, &mut cache);
         eprintln!("\nHappy debugging!\n");
 
         // raise the panic
@@ -107,27 +132,27 @@ pub fn verify<T: Shrink, R: TestResult, I: Iterator<Item = T>>(
 mod tests {
     use super::*;
 
-    #[test]
-    fn it_works() {
-        verify(0..100, &|case| {
-            case + case != 40
-        })
-    }
-
     fn quicksort(list: Vec<usize>) -> Vec<usize> {
-        return vec![];
+        if list.len() <= 1 { return list }
+        let pivot = list[0];
+        let list = &list[1..];
+        let mut lo = quicksort(list.iter().filter(|x| x < &&pivot).map(Clone::clone).collect());
+        let mut hi = quicksort(list.iter().filter(|x| x >= &&pivot).map(Clone::clone).collect());
+        lo.push(pivot);
+        lo.append(&mut hi);
+        return lo
     }
 
     #[test]
     fn is_sorted() {
         verify(
-            [vec![1, 2, 3]].iter(),
+            gen::growing_list(gen::smart_usize(gen::random_usize())),
             &|case| {
-                let sorted = quicksort(case.to_owned());
+                let sorted = quicksort(case.clone());
                 assert_eq!(sorted.len(), case.len());
                 if sorted.len() == 0 { return }
                 for item in 0..sorted.len() - 1 {
-                    assert!(sorted[item] < sorted[item + 1])
+                    assert!(sorted[item] <= sorted[item + 1])
                 }
             }
         )

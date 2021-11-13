@@ -9,11 +9,20 @@ pub struct Rng {
 }
 
 impl Rng {
-    pub fn new() -> Rng {
+    pub fn new() -> Rng { Rng::new_with_seed(RNG_SEED) }
+
+    pub fn new_with_seed(seed: u64) -> Rng {
         Rng {
-            data:   RNG_SEED,
+            data:   seed,
             hasher: DefaultHasher::new(),
         }
+    }
+
+    pub fn next_usize_max(&mut self, max: usize) -> usize {
+        let mask = 2_usize.pow(64 - (max as u64).leading_zeros()) - 1;
+        let mut out = self.next_usize() & mask;
+        while out > max { out = self.next_usize() & mask }
+        out
     }
 
     pub fn next_usize(&mut self) -> usize {
@@ -22,6 +31,10 @@ impl Rng {
             out = out << 8 | i as usize;
         }
         out
+    }
+
+    pub fn next_bool(&mut self) -> bool {
+        self.next().unwrap() % 2 == 0
     }
 }
 
