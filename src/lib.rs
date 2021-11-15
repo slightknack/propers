@@ -14,14 +14,7 @@ pub const SHRINK_BUDGET: usize = 1000;
 pub fn run_case<T: Case, R: TestResult>(
     case: T,
     run: &impl Fn(T) -> R,
-    cache: &mut HashMap<T, bool>,
 ) -> Result<(), Box<dyn FnOnce() -> ()>> {
-    match cache.get(&case) {
-        Some(true) => return Ok(()),
-        Some(false) => return Err(Box::new(move || { panic!("Cached test, already failed"); })),
-        None => (),
-    }
-
     // install a silent hook...
     let prev_hook = take_hook();
     set_hook(Box::new(|_| {}));
@@ -30,20 +23,14 @@ pub fn run_case<T: Case, R: TestResult>(
     // restore the old hook
     set_hook(prev_hook);
 
-    let err: Box<dyn FnOnce() -> ()> = match result {
-        Ok(r) if r.is_ok() => {
-            cache.insert(case.clone(), true);
-            return Ok(());
-        },
+    match result {
+        Ok(r) if r.is_ok() => Ok(()),
         Ok(e)  => {
             let formatted = format!("Failed with test result: {:#?}", e);
-            Box::new(move || { panic!("{}", formatted); })
+            Err(Box::new(move || { panic!("{}", formatted); }))
         },
-        Err(e) => Box::new(move || { resume_unwind(e); }),
-    };
-
-    cache.insert(case.clone(), false);
-    return Err(err);
+        Err(e) => Err(Box::new(move || { resume_unwind(e); })),
+    }
 }
 
 fn shrink_case<T: Shrink, R: TestResult>(

@@ -18,19 +18,23 @@ impl Rng {
         }
     }
 
-    pub fn next_usize_max(&mut self, max: usize) -> usize {
-        let mask = 2_usize.pow(64 - (max as u64).leading_zeros()) - 1;
-        let mut out = self.next_usize() & mask;
-        while out > max { out = self.next_usize() & mask }
+    pub fn next_u64_max(&mut self, max: u64) -> u64 {
+        let mask = 2_u64.pow(64 - (max as u64).leading_zeros()) - 1;
+        let mut out = self.next_u64() & mask;
+        while out > max { out = self.next_u64() & mask }
         out
     }
 
-    pub fn next_usize(&mut self) -> usize {
+    pub fn next_u64(&mut self) -> u64 {
         let mut out = 0;
-        for i in self.take(std::mem::size_of::<usize>()) {
-            out = out << 8 | i as usize;
+        for i in self.take(8) {
+            out = out << 8 | i as u64;
         }
         out
+    }
+
+    pub fn next_byte(&mut self) -> u8 {
+        self.next().unwrap()
     }
 
     pub fn next_bool(&mut self) -> bool {
