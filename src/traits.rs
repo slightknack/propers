@@ -27,19 +27,19 @@ pub trait Shrink: Case {
 pub trait  TestResult: Debug { fn is_ok(&self) -> bool; }
 
 macro_rules! test_result {
-    ($name:ty, $s:ident, $body:expr) => {
+    ($s:ident => $body:expr, $name:ty) => {
         impl $crate::TestResult for $name where Self: Debug {
             fn is_ok(&$s) -> bool { $body }
         }
     };
-    ($name:ty, $s:ident, $body:expr, $($args:tt)*) => {
+    ($s:ident => $body:expr, $name:ty : $($args:tt)+) => {
         impl<$($args)*> $crate::TestResult for $name where Self: Debug {
             fn is_ok(&$s) -> bool { $body }
         }
     };
 }
 
-test_result!{ Result<T, E>, self, self.is_ok(), T, E }
-test_result!{ Option<T>, self, self.is_some(), T }
-test_result!{ bool, self, *self }
-test_result!{ (), self, true }
+test_result!{ self => self.is_ok(), Result<T, E>: T, E }
+test_result!{ self => self.is_some(), Option<T>: T }
+test_result!{ self => *self, bool }
+test_result!{ self => true, () }
