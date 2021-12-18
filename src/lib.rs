@@ -54,7 +54,7 @@ fn shrink_case<T: Shrink, R: TestResult>(
             Some(case) => case,
         };
 
-        if run_case(case.0.clone(), run, cache).is_ok() {
+        if run_case(case.0.clone(), run).is_ok() {
             eprint!(".");
             // we don't add the passing case to the reduction set
             continue;
@@ -93,7 +93,7 @@ pub fn verify<T: Shrink, R: TestResult, I: Iterator<Item = T>>(
         };
 
         let mut cache = HashMap::new();
-        let failure = match run_case(case.clone(), run, &mut cache) {
+        let failure = match run_case(case.clone(), run) {
             Ok(_) => {
                 eprint!(".");
                 continue;
